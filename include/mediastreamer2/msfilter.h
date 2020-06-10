@@ -186,7 +186,7 @@ struct _MSFilter{
 	struct _MSFactory *factory;/**<the factory that created this filter*/
 	void *padding; /**Unused - to be reused later when new protected fields have to added*/
 	void *data; /**< Pointer used by the filter for internal state and computations.*/
-	struct _MSTicker *ticker; /**<Pointer to the ticker object. It is not NULL when being called process()*/
+	struct _MSTicker *ticker; /**<Pointer to the ticker object. It is never NULL when being called process()*/
 	/*private attributes, they can be moved and changed at any time*/
 	MSList *notify_callbacks;
 	uint32_t last_tick;
@@ -502,6 +502,13 @@ MS2_PUBLIC const char * ms_filter_get_name(MSFilter *f);
 **/
 MS2_PUBLIC MSList * ms_filter_find_neighbours(MSFilter *me);
 
+
+/**
+ * Returns the MSTicker that is currently running this filter.
+ * It might be NULL, if the filter has not been attached to a ticker for running.
+ */
+MS2_PUBLIC struct _MSTicker *ms_filter_get_ticker(MSFilter *f);
+
 /**
  * Destroy a filter object.
  *
@@ -665,7 +672,7 @@ the method index (_cnt_) and the argument size */
 #define MS_FILTER_SET_MTU		MS_FILTER_BASE_METHOD(9,int)
 #define MS_FILTER_GET_MTU		MS_FILTER_BASE_METHOD(10,int)
 /**Filters can return their latency in milliseconds (if known) using this method:*/
-#define MS_FILTER_GET_LATENCY	MS_FILTER_BASE_METHOD(11,int)
+#define MS_FILTER_GET_LATENCY		MS_FILTER_BASE_METHOD(11,int)
 
 typedef struct _MSPinFormat{
 	uint16_t pin;

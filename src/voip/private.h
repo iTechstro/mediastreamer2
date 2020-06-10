@@ -25,8 +25,11 @@
 #include "mediastreamer2/msvideopresets.h"
 
 
+
 #define MAX_RTP_SIZE	UDP_MAX_SIZE
 
+struct _MSAudioConference;
+struct _MSVideoConference;
 
 #ifdef __cplusplus
 extern "C"
@@ -95,6 +98,14 @@ MS2_PUBLIC void ms_zrtp_set_stream_sessions(MSZrtpContext *zrtp_context, MSMedia
 
 bool_t ms_media_stream_sessions_secured(const MSMediaStreamSessions *sessions,MediaStreamDir dir);
 
+/* The handler of tmmbr for MediaStream objects.*/
+void media_stream_tmmbr_received(const OrtpEventData *evd, void *user_pointer);
+void media_stream_process_tmmbr(MediaStream *ms, int tmmbr_mxtbr);
+
+void media_stream_add_tmmbr_handler(MediaStream *stream, void (*on_tmmbr_received)(const OrtpEventData *evd, void *), void *user_data);
+
+void media_stream_remove_tmmbr_handler(MediaStream *stream, void (*on_tmmbr_received)(const OrtpEventData *evd, void *), void *user_data);
+
 MSSrtpCtx* ms_srtp_context_new(void);
 void ms_srtp_context_delete(MSSrtpCtx *session);
 
@@ -107,6 +118,8 @@ void video_recorder_handle_event(void *userdata, MSFilter *recorder, unsigned in
 void ms_audio_flow_control_event_handler(void *user_data, MSFilter *f, unsigned int event, void *eventdata);
 
 void video_stream_enable_recording(VideoStream *stream, bool_t enabled);
+
+void ms_audio_conference_set_video_conference(struct _MSAudioConference *audioconf, struct _MSVideoConference *videoconf);
 
 /*
  * Currently common to every h264 implementations including plugins

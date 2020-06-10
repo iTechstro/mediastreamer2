@@ -93,7 +93,10 @@ bool_t ms_filter_desc_implements_interface(MSFilterDesc *desc, MSFilterInterface
 }
 
 bool_t ms_filter_implements_interface(MSFilter *f, MSFilterInterfaceId id){
-	return ms_filter_desc_implements_interface(f->desc,id);
+	if (f)
+		return ms_filter_desc_implements_interface(f->desc,id);
+	else
+		return FALSE;
 }
 
 bctbx_list_t *ms_filter_lookup_by_interface(MSFilterInterfaceId id){
@@ -120,6 +123,14 @@ int ms_filter_link(MSFilter *f1, int pin1, MSFilter *f2, int pin2){
 	ms_return_val_if_fail(pin2<f2->desc->ninputs, -1);
 	ms_return_val_if_fail(f1->outputs[pin1]==NULL,-1);
 	ms_return_val_if_fail(f2->inputs[pin2]==NULL,-1);
+#ifdef MS2_NO_RELINK_WHILE_RUNNING
+	if (f1->ticker){
+		ms_fatal("Filter %s:%p is already scheduled.", f1->desc->name, f1);
+	}
+	if (f2->ticker){
+		ms_fatal("Filter %s:%p is already scheduled.", f2->desc->name, f2);
+	}
+#endif
 	q=ms_queue_new(f1,pin1,f2,pin2);
 	f1->outputs[pin1]=q;
 	f2->inputs[pin2]=q;
@@ -134,6 +145,14 @@ int ms_filter_unlink(MSFilter *f1, int pin1, MSFilter *f2, int pin2){
 	ms_return_val_if_fail(f1->outputs[pin1]!=NULL,-1);
 	ms_return_val_if_fail(f2->inputs[pin2]!=NULL,-1);
 	ms_return_val_if_fail(f1->outputs[pin1]==f2->inputs[pin2],-1);
+#ifdef MS2_NO_RELINK_WHILE_RUNNING
+	if (f1->ticker){
+		ms_fatal("Filter %s:%p is still scheduled.", f1->desc->name, f1);
+	}
+	if (f2->ticker){
+		ms_fatal("Filter %s:%p is still scheduled.", f2->desc->name, f2);
+	}
+#endif
 	q=f1->outputs[pin1];
 	f1->outputs[pin1]=f2->inputs[pin2]=0;
 	ms_queue_destroy(q);
@@ -145,25 +164,29 @@ static MS2_INLINE bool_t is_interface_method(unsigned int magic){
 }
 
 static int _ms_filter_call_method(MSFilter *f, unsigned int id, void *arg){
-	MSFilterMethod *methods=f->desc->methods;
-	int i;
-	unsigned int magic=MS_FILTER_METHOD_GET_FID(id);
-	if (!is_interface_method(magic) && magic!=f->desc->id) {
-		ms_fatal("Method type checking failed when calling %u on filter %s",id,f->desc->name);
-		return -1;
-	}
-	for(i=0;methods!=NULL && methods[i].method!=NULL; i++){
-		unsigned int mm=MS_FILTER_METHOD_GET_FID(methods[i].id);
-		if (mm!=f->desc->id && !is_interface_method(mm)) {
-			ms_fatal("Bad method definition on filter %s. fid=%u , mm=%u",f->desc->name,f->desc->id,mm);
+	if (f) {
+		MSFilterMethod *methods=f->desc->methods;
+		int i;
+		unsigned int magic=MS_FILTER_METHOD_GET_FID(id);
+		if (!is_interface_method(magic) && magic!=f->desc->id) {
+			ms_fatal("Method type checking failed when calling %u on filter %s",id,f->desc->name);
 			return -1;
 		}
-		if (methods[i].id==id){
-			return methods[i].method(f,arg);
+		for(i=0;methods!=NULL && methods[i].method!=NULL; i++){
+			unsigned int mm=MS_FILTER_METHOD_GET_FID(methods[i].id);
+			if (mm!=f->desc->id && !is_interface_method(mm)) {
+				ms_fatal("Bad method definition on filter %s. fid=%u , mm=%u",f->desc->name,f->desc->id,mm);
+				return -1;
+			}
+			if (methods[i].id==id){
+				return methods[i].method(f,arg);
+			}
 		}
+		if (magic!=MS_FILTER_BASE_ID) ms_error("no such method on filter %s, fid=%i method index=%i",f->desc->name,magic,
+					   MS_FILTER_METHOD_GET_INDEX(id) );
+	} else {
+		ms_warning("[%s] Ignoring call to filter method as the provided filter is NULL", __FUNCTION__);
 	}
-	if (magic!=MS_FILTER_BASE_ID) ms_error("no such method on filter %s, fid=%i method index=%i",f->desc->name,magic,
-	                           MS_FILTER_METHOD_GET_INDEX(id) );
 	return -1;
 }
 
@@ -307,6 +330,10 @@ bctbx_list_t * ms_filter_find_neighbours(MSFilter *me){
 		f->seen=FALSE;
 	}
 	return l;
+}
+
+MSTicker *ms_filter_get_ticker(MSFilter *f){
+	return f->ticker;
 }
 
 void ms_connection_helper_start(MSConnectionHelper *h){

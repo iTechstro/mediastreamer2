@@ -131,6 +131,7 @@ set(VOIP_SOURCE_FILES_C
 set(VOIP_SOURCE_FILES_CXX
 	utils/filter-wrapper/decoding-filter-wrapper.cpp
 	utils/filter-wrapper/encoding-filter-wrapper.cpp
+	voip/turn_tcp.cpp
 )
 set(VOIP_SOURCE_FILES_OBJC )
 set(VOIP_SOURCE_FILES_ASM )
@@ -147,6 +148,7 @@ if(ANDROID)
 endif()
 if(ENABLE_ANDROIDSND)
 	list(APPEND VOIP_SOURCE_FILES_CXX
+		android/androidsound_utils.cpp
 		android/androidsound.cpp
 		android/androidsound_depr.cpp
 		android/androidsound_opensles.cpp
@@ -221,6 +223,7 @@ if(ENABLE_VIDEO)
 		videofilters/nowebcam.c
 		videofilters/pixconv.c
 		videofilters/sizeconv.c
+		videofilters/videoswitcher.c
 		voip/layouts.c
 		voip/layouts.h
 		voip/msvideo_neon.c
@@ -232,21 +235,28 @@ if(ENABLE_VIDEO)
 		voip/video_preset_high_fps.c
 		voip/videostarter.c
 		voip/videostream.c
+		voip/videoconference.c
+		voip/vp8rtpfmt.c
+		voip/vp8rtpfmt.h
 	)
 	if(FFMPEG_FOUND AND NOT TURBOJPEG_FOUND)
 		list(APPEND VOIP_SOURCE_FILES_C
-			videofilters/ffmpegnowebcam.c
+			utils/jpgloader-ffmpeg.c
 		)
 	elseif(TURBOJPEG_FOUND)
 		list(APPEND VOIP_SOURCE_FILES_C
-			videofilters/turbojpegnowebcam.c
+			utils/jpgloader-turbojpeg.c
+		)
+	else()
+		list(APPEND VOIP_SOURCE_FILES_C
+			utils/jpgloader-stub.c
 		)
 	endif()
 	if(WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsPhone" AND NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
 		add_definitions(-DHAVE_DIRECTSHOW)
-		list(APPEND VOIP_SOURCE_FILES_C
-			videofilters/drawdib-display.c
-		)
+		if(NOT(ENABLE_MICROSOFT_STORE_APP))
+			list(APPEND VOIP_SOURCE_FILES_C videofilters/drawdib-display.c)
+		endif()
 		list(APPEND VOIP_SOURCE_FILES_CXX
 			videofilters/msdscap.cc
 		)
@@ -376,8 +386,6 @@ if(ENABLE_VIDEO)
 	if(VPX_FOUND)
 		list(APPEND VOIP_SOURCE_FILES_C
 			videofilters/vp8.c
-			voip/vp8rtpfmt.c
-			voip/vp8rtpfmt.h
 		)
 	endif()
 	if(X11_FOUND)

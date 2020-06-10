@@ -18,38 +18,13 @@
  */
 
 
-#include "mediastreamer2/mediastream.h"
-
-int main(int argc, char *argv[]){
-	RingStream *r;
-	const char *file;
-	MSSndCard *sc;
-	const char * card_id=NULL;
-	MSFactory *factory;
-
-	ortp_init();
-	ortp_set_log_level_mask(ORTP_LOG_DOMAIN, ORTP_MESSAGE|ORTP_WARNING|ORTP_ERROR|ORTP_FATAL);
-	
-	
-	factory = ms_factory_new_with_voip();
-	
-	if (argc>1){
-		file=argv[1];
-	}else file="/usr/share/sounds/linphone/rings/oldphone.wav";
-	if (argc>2){
-		card_id=argv[2];
-	}
-
-	sc=ms_snd_card_manager_get_card(ms_factory_get_snd_card_manager(factory),card_id);
-#ifdef __linux__
-	if (sc==NULL)
-	  sc = ms_alsa_card_new_custom(card_id, card_id);
+#ifdef HAVE_CONFIG_H
+#include "mediastreamer-config.h"
 #endif
 
-	r=ring_start(factory, file,2000,sc);
-	ms_sleep(10);
-	ring_stop(r);
-	
-	ms_factory_destroy(factory);
-	return 0;
+#include "mediastreamer2/msvideo.h"
+
+mblk_t *jpeg2yuv(uint8_t *jpgbuf, int bufsize, MSVideoSize *reqsize){
+	ms_warning("jpeg2yuv() stubbed, no jpg decoder implementation compiled with mediastreamer2.");
+	return NULL;
 }

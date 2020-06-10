@@ -19,17 +19,23 @@
 
 #include "mediastreamer2/msconference.h"
 #include "mediastreamer2/msaudiomixer.h"
+#include "mediastreamer2/msvolume.h"
 #include "private.h"
+
+static const int audio_threshold_min_db = -30;
 
 struct _MSAudioConference{
 	MSTicker *ticker;
 	MSFilter *mixer;
 	MSAudioConferenceParams params;
+	bctbx_list_t *members; /* list of MSAudioEndpoint */
 	int nmembers;
+	MSAudioEndpoint *active_speaker;
 };
 
 struct _MSAudioEndpoint{
 	AudioStream *st;
+	void *user_data;
 	MSFilter *in_resampler,*out_resampler;
 	MSCPoint out_cut_point;
 	MSCPoint in_cut_point;
@@ -41,6 +47,7 @@ struct _MSAudioEndpoint{
 	MSFilter *player; /* not used at the moment, but we need it so that there is a source connected to the mixer*/
 	int pin;
 	int samplerate;
+	bool_t muted;
 };
 
 
@@ -178,7 +185,9 @@ void ms_audio_conference_add_member(MSAudioConference *obj, MSAudioEndpoint *ep)
 	if (obj->nmembers>0) ms_ticker_detach(obj->ticker,obj->mixer);
 	plumb_to_conf(ep);
 	ms_ticker_attach(obj->ticker,obj->mixer);
+	obj->members = bctbx_list_append(obj->members, ep);
 	obj->nmembers++;
+	ms_audio_conference_mute_member(obj, ep, ep->muted);
 }
 
 static void unplumb_from_conf(MSAudioEndpoint *ep){
@@ -199,6 +208,7 @@ void ms_audio_conference_remove_member(MSAudioConference *obj, MSAudioEndpoint *
 	unplumb_from_conf(ep);
 	ep->conference=NULL;
 	obj->nmembers--;
+	obj->members = bctbx_list_remove(obj->members, ep);
 	if (obj->nmembers>0) ms_ticker_attach(obj->ticker,obj->mixer);
 }
 
@@ -206,11 +216,42 @@ void ms_audio_conference_mute_member(MSAudioConference *obj, MSAudioEndpoint *ep
 	MSAudioMixerCtl ctl={0};
 	ctl.pin=ep->pin;
 	ctl.param.active=!muted;
+	ep->muted = muted;
 	ms_filter_call_method(ep->conference->mixer, MS_AUDIO_MIXER_SET_ACTIVE, &ctl);
 }
 
 int ms_audio_conference_get_size(MSAudioConference *obj){
 	return obj->nmembers;
+}
+
+
+void ms_audio_conference_process_events(MSAudioConference *obj){
+	const bctbx_list_t *elem;
+	float max_db_over_member = MS_VOLUME_DB_LOWEST;
+	MSAudioEndpoint *winner = NULL;
+	
+	for (elem = obj->members; elem != NULL; elem = elem->next){
+		MSAudioEndpoint *ep = (MSAudioEndpoint *) elem->data;
+		int is_remote = (ep->in_cut_point_prev.filter == ep->st->volrecv);
+		MSFilter *volume_filter = is_remote ? ep->st->volrecv : ep->st->volsend;
+		if (ep->muted) continue;
+		if (volume_filter){
+			float max_db = MS_VOLUME_DB_LOWEST;
+			if (ms_filter_call_method(volume_filter, MS_VOLUME_GET_MAX, &max_db) == 0){
+				if (max_db > audio_threshold_min_db && max_db > max_db_over_member){
+					max_db_over_member = max_db;
+					winner = ep;
+				}
+			}
+			
+		}
+	}
+	if (obj->active_speaker != winner && winner != NULL){
+		ms_message("Active speaker changed: now on pin %i", winner->pin);
+		if (obj->params.active_talker_callback)
+			obj->params.active_talker_callback(obj, winner);
+		obj->active_speaker = winner;
+	}
 }
 
 
@@ -220,19 +261,20 @@ void ms_audio_conference_destroy(MSAudioConference *obj){
 	ms_free(obj);
 }
 
-//MSAudioEndpoint *ms_audio_endpoint_new(void){
-//	MSAudioEndpoint *ep=ms_new0(MSAudioEndpoint,1);
-//	ep->in_resampler=ms_filter_new(MS_RESAMPLE_ID);
-//	ep->out_resampler=ms_filter_new(MS_RESAMPLE_ID);
-//	ep->samplerate=8000;
-//	return ep;
-//}
 
 MSAudioEndpoint *ms_audio_endpoint_new(void){
 	MSAudioEndpoint *ep=ms_new0(MSAudioEndpoint,1);
 
 	ep->samplerate=8000;
 	return ep;
+}
+
+void ms_audio_endpoint_set_user_data(MSAudioEndpoint *ep, void *user_data){
+	ep->user_data = user_data;
+}
+
+void * ms_audio_endpoint_get_user_data(const MSAudioEndpoint *ep){
+	return ep->user_data;
 }
 
 MSAudioEndpoint * ms_audio_endpoint_get_from_stream(AudioStream *st, bool_t is_remote){

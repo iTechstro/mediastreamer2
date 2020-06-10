@@ -23,6 +23,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import java.io.File;
 import android.media.AudioManager;
+import android.media.AudioDeviceInfo;
 import android.os.Build;
 
 public class MediastreamerAndroidContext {
@@ -103,6 +104,31 @@ public class MediastreamerAndroidContext {
 		}
 	}
 
+	public static AudioDeviceInfo[] getAudioDevices(final String device_dir) {
+		int flag = -1;
+		switch(device_dir) {
+			case "output":
+				flag = AudioManager.GET_DEVICES_OUTPUTS;
+				break;
+			case "input":
+				flag = AudioManager.GET_DEVICES_INPUTS;
+				break;
+			case "all":
+				flag = AudioManager.GET_DEVICES_ALL;
+				break;
+			default:
+				Log.e("Unknown device direction - Provided is " + device_dir + " Valid values are output input all");
+				break;
+		}
+
+		AudioManager audiomanager = (AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		final AudioDeviceInfo[] devices = audiomanager.getDevices(flag);
+		for (AudioDeviceInfo device : devices) {
+			Log.i("[getAudioDevices] DEBUG Found device: name " + device.getProductName() + " ID " + device.getId() + " type " + device.getType() + " isSource " + device.isSource() + " isSink " + device.isSink() + ".");
+		}
+		return devices;
+	}
+
 	public static boolean getSpeakerphoneAlwaysOn(org.linphone.mediastream.Factory factory) {
 		//For special devices, speakerphone always on
 		return ((factory.getDeviceFlags() & Factory.DEVICE_USE_ANDROID_CAMCORDER)!=0);
@@ -138,5 +164,47 @@ public class MediastreamerAndroidContext {
 	 * */
 	public static boolean filterFromNameEnabled(String name) {
 		return getInstance().filterFromNameEnabledImpl(name);
+	}
+
+	public synchronized static void enableSpeaker() { 
+		AudioManager audioManager = (AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		if (audioManager.isBluetoothScoOn()) {
+			stopBluetooth();
+		}
+
+		Log.i("[Audio Manager] Turning on speakerphone");
+		audioManager.setSpeakerphoneOn(true);
+	}
+
+	public synchronized static void enableEarpiece() {
+		AudioManager audioManager = (AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		if (audioManager.isBluetoothScoOn()) {
+			stopBluetooth();
+		}
+
+		Log.i("[Audio Manager] Turning off speakerphone");
+		audioManager.setSpeakerphoneOn(false);
+	}
+
+	public synchronized static void startBluetooth() {
+		AudioManager audioManager = (AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		Log.i("[Audio Manager] Starting bluetooth SCO");
+		audioManager.setBluetoothScoOn(true);
+		audioManager.startBluetoothSco();
+	}
+
+	public synchronized static void stopBluetooth() {
+		AudioManager audioManager = (AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		Log.i("[Audio Manager] Stopping bluetooth SCO");
+		audioManager.stopBluetoothSco();
+		audioManager.setBluetoothScoOn(false);
+	}
+
+	public synchronized static void hackVolume() {
+		Log.i("[Audio Manager] Lower & raise audio volume to workaround no sound issue until volume has changed...");
+		AudioManager audioManager = (AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		audioManager.adjustSuggestedStreamVolume(AudioManager.ADJUST_LOWER, AudioManager.STREAM_VOICE_CALL, 0);
+		//try { Thread.sleep(100); } catch (Exception e) { }
+		audioManager.adjustSuggestedStreamVolume(AudioManager.ADJUST_RAISE, AudioManager.STREAM_VOICE_CALL, 0);
 	}
 }

@@ -38,9 +38,27 @@
 #include "TargetConditionals.h"
 #endif
 
+#define MS2_NO_VIDEO_RESCALING 1
+
 static void configure_recorder_output(VideoStream *stream);
 static int video_stream_start_with_source_and_output(VideoStream *stream, RtpProfile *profile, const char *rem_rtp_ip, int rem_rtp_port,
 	const char *rem_rtcp_ip, int rem_rtcp_port, int payload, int jitt_comp, MSWebCam *cam, MSFilter *source, MSFilter *output);
+
+static void assign_value_to_mirroring_flag_to_preview(VideoStream *stream) {
+	if (stream && stream->output2) {
+		MSWebCam * cam = stream->cam;
+		int mirroring = TRUE;
+		if (cam) {
+			const char * cam_name=ms_web_cam_get_string_id(cam);
+			if (cam_name) {
+				// If the camera does't show a static image, then set mirroring to 1, 0 otherwise
+				mirroring = (strstr(cam_name,"Static picture")==NULL);
+			}
+		}
+		ms_filter_call_method(stream->output2, MS_VIDEO_DISPLAY_ENABLE_MIRRORING, &mirroring);
+	}
+}
+
 
 static void video_stream_update_jitter_for_nack(const OrtpEventData *evd, VideoStream *stream) {
 	if (stream->audiostream != NULL) {
@@ -158,6 +176,10 @@ static void internal_event_cb(void *ud, MSFilter *f, unsigned int event, void *e
 	}
 }
 
+static void video_stream_process_encoder_control(VideoStream *stream, unsigned int method_id, void *arg, void *user_data){
+	ms_filter_call_method(stream->ms.encoder, method_id, arg);
+}
+
 static void video_stream_process_rtcp(MediaStream *media_stream, mblk_t *m){
 	VideoStream *stream = (VideoStream *)media_stream;
 	int i;
@@ -173,7 +195,7 @@ static void video_stream_process_rtcp(MediaStream *media_stream, mblk_t *m){
 				if (rtcp_fb_fir_fci_get_ssrc(fci) == rtp_session_get_send_ssrc(stream->ms.sessions.rtp_session)) {
 					uint8_t seq_nr = rtcp_fb_fir_fci_get_seq_nr(fci);
 					/* TODO: manage seq_nr and ignore FIR repeats to avoid flooding the encoder */
-					ms_filter_call_method(stream->ms.encoder, MS_VIDEO_ENCODER_NOTIFY_FIR, &seq_nr);
+					stream->encoder_control_cb(stream,  MS_VIDEO_ENCODER_NOTIFY_FIR, &seq_nr, stream->encoder_control_cb_user_data);
 					stream->ms_video_stat.counter_rcvd_fir++;
 					ms_message("Got RTCP FIR on video stream [%p] SSRC [%x] count %d, seq %u", 
 						stream, rtcp_fb_fir_fci_get_ssrc(fci), stream->ms_video_stat.counter_rcvd_fir, seq_nr);
@@ -194,7 +216,7 @@ static void video_stream_process_rtcp(MediaStream *media_stream, mblk_t *m){
 				case RTCP_PSFB_PLI:
 
 					stream->ms_video_stat.counter_rcvd_pli++;
-					ms_filter_call_method_noarg(stream->ms.encoder, MS_VIDEO_ENCODER_NOTIFY_PLI);
+					stream->encoder_control_cb(stream, MS_VIDEO_ENCODER_NOTIFY_PLI, NULL, stream->encoder_control_cb_user_data);
 					ms_message("Got RTCP PLI on video stream [%p] SSRC [%x] count %d", 
 						stream, rtcp_PSFB_get_media_source_ssrc(m), stream->ms_video_stat.counter_rcvd_pli);
 					break;
@@ -207,7 +229,7 @@ static void video_stream_process_rtcp(MediaStream *media_stream, mblk_t *m){
 						sli.first = rtcp_fb_sli_fci_get_first(fci);
 						sli.number = rtcp_fb_sli_fci_get_number(fci);
 						sli.picture_id = rtcp_fb_sli_fci_get_picture_id(fci);
-						ms_filter_call_method(stream->ms.encoder, MS_VIDEO_ENCODER_NOTIFY_SLI, &sli);
+						stream->encoder_control_cb(stream, MS_VIDEO_ENCODER_NOTIFY_SLI, &sli, stream->encoder_control_cb_user_data);
 						stream->ms_video_stat.counter_rcvd_sli++;
 						ms_message("video_stream_process_rtcp stream [%p] SLI count %d", stream,  stream->ms_video_stat.counter_rcvd_sli);
 
@@ -219,7 +241,7 @@ static void video_stream_process_rtcp(MediaStream *media_stream, mblk_t *m){
 					MSVideoCodecRPSI rpsi;
 					rpsi.bit_string = rtcp_fb_rpsi_fci_get_bit_string(fci);
 					rpsi.bit_string_len = rtcp_PSFB_rpsi_get_fci_bit_string_len(m);
-					ms_filter_call_method(stream->ms.encoder, MS_VIDEO_ENCODER_NOTIFY_RPSI, &rpsi);
+					stream->encoder_control_cb(stream, MS_VIDEO_ENCODER_NOTIFY_RPSI, &rpsi, stream->encoder_control_cb_user_data);
 					stream->ms_video_stat.counter_rcvd_rpsi++;
 					ms_message("video_stream_process_rtcp stream [%p] RPSI count %d", stream,  stream->ms_video_stat.counter_rcvd_rpsi);
 				}
@@ -235,6 +257,15 @@ static void video_stream_process_rtcp(MediaStream *media_stream, mblk_t *m){
 			rtp_session_get_send_ssrc(stream->ms.sessions.rtp_session));
 		}
 	}
+}
+
+void video_stream_set_encoder_control_callback(VideoStream *stream, VideoStreamEncoderControlCb cb, void *user_data){
+	if (cb == NULL) {
+		cb = video_stream_process_encoder_control;
+		user_data = NULL;
+	}
+	stream->encoder_control_cb = cb;
+	stream->encoder_control_cb_user_data = user_data;
 }
 
 static void stop_preload_graph(VideoStream *stream){
@@ -263,7 +294,7 @@ static void video_stream_track_fps_changes(VideoStream *stream){
 				ms_filter_has_method(stream->ms.encoder,MS_VIDEO_ENCODER_SET_CONFIGURATION)){
 				float fps=0;
 
-				if (ms_filter_call_method(stream->source,MS_FILTER_GET_FPS,&fps)==0 && fps!=0){
+				if (ms_filter_call_method(stream->source,MS_FILTER_GET_FPS,&fps)==0 && fps >= 1.0){
 					if (fabsf(fps-stream->configured_fps)/stream->configured_fps>0.2){
 						MSVideoConfiguration vconf;
 						ms_warning("Measured and target fps significantly different (%f<->%f), updating encoder.",
@@ -400,6 +431,7 @@ VideoStream *video_stream_new_with_sessions(MSFactory* factory, const MSMediaStr
 	stream->output_performs_decoding = FALSE;
 	choose_display_name(stream);
 	stream->ms.process_rtcp=video_stream_process_rtcp;
+	video_stream_set_encoder_control_callback(stream, NULL, NULL);
 	/*
 	 * In practice, these filters are needed only for audio+video recording.
 	 */
@@ -549,7 +581,7 @@ void video_stream_set_direction(VideoStream *vs, MediaStreamDir dir){
 // 	return wished_size;
 // }
 
-#if !TARGET_IPHONE_SIMULATOR && !defined(MS_HAS_ARM)
+#if !TARGET_IPHONE_SIMULATOR && !defined(MS_HAS_ARM) && !defined(MS2_NO_VIDEO_RESCALING)
 static MSVideoSize get_with_same_orientation_and_ratio(MSVideoSize size, MSVideoSize refsize){
 	if (ms_video_size_get_orientation(refsize)!=ms_video_size_get_orientation(size)){
 		int tmp;
@@ -563,7 +595,7 @@ static MSVideoSize get_with_same_orientation_and_ratio(MSVideoSize size, MSVideo
 #endif
 
 static void configure_video_source(VideoStream *stream, bool_t skip_bitrate, bool_t first_time){
-	MSVideoSize cam_vsize;
+	MSVideoSize cam_vsize = {320, 240};
 	MSVideoConfiguration vconf;
 	MSPixFmt format=MS_PIX_FMT_UNKNOWN;
 	MSVideoEncoderPixFmt encoder_supports_source_format;
@@ -636,7 +668,7 @@ static void configure_video_source(VideoStream *stream, bool_t skip_bitrate, boo
 		vconf.vsize=cam_vsize;
 		ms_message("Output video size adjusted to match camera resolution (%ix%i)",vconf.vsize.width,vconf.vsize.height);
 	} else {
-#if TARGET_IPHONE_SIMULATOR || defined(MS_HAS_ARM) || defined(MS2_WINDOWS_UNIVERSAL)
+#if TARGET_IPHONE_SIMULATOR || defined(MS_HAS_ARM) || defined(MS2_WINDOWS_UNIVERSAL) || defined(MS2_NO_VIDEO_RESCALING)
 		ms_error("Camera is proposing a size bigger than encoder's suggested size (%ix%i > %ix%i) "
 				   "Using the camera size as fallback because cropping or resizing is not implemented for this device.",
 				   cam_vsize.width,cam_vsize.height,vconf.vsize.width,vconf.vsize.height);
@@ -709,10 +741,12 @@ static void configure_video_source(VideoStream *stream, bool_t skip_bitrate, boo
 			ms_filter_call_method(stream->pixconv,MS_FILTER_SET_PIX_FMT,&format);
 			ms_filter_call_method(stream->pixconv,MS_FILTER_SET_VIDEO_SIZE,&cam_vsize);
 		}
+#ifndef MS2_NO_VIDEO_RESCALING
 		if (ms_video_get_scaler_impl() != NULL) {
 			stream->sizeconv=ms_factory_create_filter(stream->ms.factory, MS_SIZE_CONV_ID);
 			ms_filter_call_method(stream->sizeconv,MS_FILTER_SET_VIDEO_SIZE,&vconf.vsize);
 		}
+#endif
 	}
 	if (stream->ms.rc){
 		ms_bitrate_controller_destroy(stream->ms.rc);
@@ -881,6 +915,9 @@ int video_stream_start_from_io(VideoStream *stream, RtpProfile *profile, const c
 						ms_filter_call_method_noarg(source, MS_PLAYER_START);
 				}
 			break;
+			case MSResourceVoid:
+				stream->source = ms_factory_create_filter(stream->ms.factory, MS_VOID_SOURCE_ID);
+			break;
 			default:
 				ms_error("Unhandled input resource type %s", ms_resource_type_to_string(io->input.type));
 			break;
@@ -905,6 +942,9 @@ int video_stream_start_from_io(VideoStream *stream, RtpProfile *profile, const c
 				stream->recorder_output = recorder;
 				ms_filter_add_notify_callback(recorder, video_recorder_handle_event, stream, TRUE);
 				if (io->output.file) video_stream_open_remote_record(stream, io->output.file);
+			break;
+			case MSResourceVoid:
+				output = ms_factory_create_filter(stream->ms.factory, MS_VOID_SINK_ID);
 			break;
 			default:
 				/*will just display in all other cases*/
@@ -1012,7 +1052,7 @@ static int video_stream_start_with_source_and_output(VideoStream *stream, RtpPro
 	MSPixFmt format;
 	MSVideoSize disp_size;
 	JBParameters jbp;
-	const int socket_buf_size=2000000;
+	
 	bool_t avpf_enabled = FALSE;
 	bool_t rtp_source = FALSE;
 	bool_t rtp_output = FALSE;
@@ -1065,8 +1105,6 @@ static int video_stream_start_with_source_and_output(VideoStream *stream, RtpPro
 	rtp_session_get_jitter_buffer_params(stream->ms.sessions.rtp_session,&jbp);
 	jbp.max_packets=1000;//needed for high resolution video
 	rtp_session_set_jitter_buffer_params(stream->ms.sessions.rtp_session,&jbp);
-	rtp_session_set_rtp_socket_recv_buffer_size(stream->ms.sessions.rtp_session,socket_buf_size);
-	rtp_session_set_rtp_socket_send_buffer_size(stream->ms.sessions.rtp_session,socket_buf_size);
 
 	/* Plumb the outgoing stream */
 	if (rem_rtp_port>0) ms_filter_call_method(stream->ms.rtpsend,MS_RTP_SEND_SET_SESSION,stream->ms.sessions.rtp_session);
@@ -1140,6 +1178,10 @@ static int video_stream_start_with_source_and_output(VideoStream *stream, RtpPro
 		if (stream->output2){
 			if (stream->preview_window_id!=0){
 				ms_filter_call_method(stream->output2, MS_VIDEO_DISPLAY_SET_NATIVE_WINDOW_ID,&stream->preview_window_id);
+			}
+
+			if (ms_filter_get_id(stream->output2) == MS_OGL_ID) {
+				assign_value_to_mirroring_flag_to_preview(stream);
 			}
 			ms_filter_link(stream->tee,1,stream->output2,0);
 		}
@@ -1383,9 +1425,12 @@ static MSFilter* _video_stream_change_camera(VideoStream *stream, MSWebCam *cam,
 	bool_t use_player        = (sink && !stream->player_active) || (!sink && stream->player_active);
 	bool_t change_source       = ( cam!=stream->cam || new_src_different || use_player);
 	bool_t encoder_has_builtin_converter = (!stream->pixconv && !stream->sizeconv);
+	/* We get the ticker from the source filter rather than stream->ms.sessions.ticker, for the case where the graph is actually running
+	 * in a MSVideoConference that has its own ticker. */
+	MSTicker *current_ticker = stream->source ? ms_filter_get_ticker(stream->source) : NULL;
 
-	if (stream->ms.sessions.ticker && stream->source){
-		ms_ticker_detach(stream->ms.sessions.ticker,stream->source);
+	if (current_ticker && stream->source){
+		ms_ticker_detach(current_ticker, stream->source);
 		/*unlink source filters and subsequent post processing filters */
 		if (encoder_has_builtin_converter || (stream->source_performs_encoding == TRUE)) {
 			ms_filter_unlink(stream->source, 0, stream->tee, 0);
@@ -1483,7 +1528,12 @@ static MSFilter* _video_stream_change_camera(VideoStream *stream, MSWebCam *cam,
 			}
 		}
 
-		ms_ticker_attach(stream->ms.sessions.ticker,stream->source);
+		// Change value of mirroring as potentially the webcam was changed
+		if (stream->output2 && ms_filter_get_id(stream->output2) == MS_OGL_ID) {
+			assign_value_to_mirroring_flag_to_preview(stream);
+		}
+
+		ms_ticker_attach(current_ticker, stream->source);
 	}
 	return old_source;
 }
@@ -1807,6 +1857,7 @@ void video_preview_start(VideoPreview *stream, MSWebCam *device) {
 	MSConnectionHelper ch;
 
 	stream->source = ms_web_cam_create_reader(device);
+	stream->cam = device;
 
 	/* configure the filters */
 	configure_video_preview_source(stream);
@@ -1817,7 +1868,6 @@ void video_preview_start(VideoPreview *stream, MSWebCam *device) {
 #else
 	{
 		MSPixFmt format = MS_YUV420P; /* Display format */
-		int mirroring = 1;
 		int corner = -1;
 		MSVideoSize disp_size = stream->sent_vsize;
 		const char *displaytype = stream->display_name;
@@ -1826,8 +1876,8 @@ void video_preview_start(VideoPreview *stream, MSWebCam *device) {
 			stream->output2=ms_factory_create_filter_from_name(stream->ms.factory, displaytype);
 			ms_filter_call_method(stream->output2, MS_FILTER_SET_PIX_FMT, &format);
 			ms_filter_call_method(stream->output2, MS_FILTER_SET_VIDEO_SIZE, &disp_size);
-			ms_filter_call_method(stream->output2, MS_VIDEO_DISPLAY_ENABLE_MIRRORING, &mirroring);
 			ms_filter_call_method(stream->output2, MS_VIDEO_DISPLAY_SET_LOCAL_VIEW_MODE, &corner);
+			assign_value_to_mirroring_flag_to_preview(stream);
 			/* and then connect all */
 		}
 	}

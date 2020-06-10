@@ -21,7 +21,7 @@
 ############################################################################
 
 cmake_minimum_required(VERSION 3.1)
-project(mediastreamer2 VERSION 4.3.0 LANGUAGES C CXX)
+project(mediastreamer2 VERSION 4.4.0 LANGUAGES C CXX)
 
 # See: https://cmake.org/cmake/help/v3.12/policy/CMP0072.html
 if(POLICY CMP0072)
@@ -114,7 +114,7 @@ cmake_dependent_option(ENABLE_QNX "Build medistreamer2 with BB10 filters." NO "E
 option(ENABLE_JPEG "Enable JPEG support" YES)
 cmake_dependent_option(ENABLE_QRCODE "Enable QRCode support" YES "ENABLE_VIDEO" NO)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

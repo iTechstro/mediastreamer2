@@ -162,7 +162,14 @@ int ms_ticker_attach_multiple(MSTicker *ticker,MSFilter *f,...)
 				ms_filter_preprocess((MSFilter*)it->data,ticker);
 			bctbx_list_free(filters);
 			total_sources=bctbx_list_concat(total_sources,sources);
-		}else ms_message("Filter %s is already being scheduled; nothing to do.",f->desc->name);
+		}else{
+			if (f->ticker == ticker){
+				ms_message("Filter %s is already being scheduled; nothing to do.",f->desc->name);
+			}else{
+				ms_fatal("MSTicker %p; cannot attach filter %s:%p : it is already being run by ticker %p.",
+					 ticker, f->desc->name, f, f->ticker);
+			}
+		}
 	}while ((f=va_arg(l,MSFilter*))!=NULL);
 	va_end(l);
 	if (total_sources){
@@ -178,7 +185,7 @@ static void call_postprocess(MSFilter *f){
 	ms_filter_postprocess(f);
 }
 
-int ms_ticker_detach(MSTicker *ticker,MSFilter *f){
+int ms_ticker_detach(MSTicker *ticker, MSFilter *f){
 	bctbx_list_t *sources=NULL;
 	bctbx_list_t *filters=NULL;
 	bctbx_list_t *it;
@@ -186,6 +193,12 @@ int ms_ticker_detach(MSTicker *ticker,MSFilter *f){
 	if (f->ticker==NULL) {
 		ms_message("Filter %s is not scheduled; nothing to do.",f->desc->name);
 		return 0;
+	}
+	
+	if (f->ticker != ticker){
+		ms_fatal("ms_ticker_detach(): filter %s:%p is currently scheduled by MSTicker %p, but requested to detach from MSTicker %p. This is a programming mistake.",
+			 f->desc->name, f, f->ticker, ticker);
+		return -1;
 	}
 
 	ms_mutex_lock(&ticker->lock);
@@ -562,7 +575,7 @@ void ms_ticker_get_last_late_tick(MSTicker *ticker, MSTickerLateEvent *ev){
 }
 
 static void ms_ticker_synchronizer_reset(MSTickerSynchronizer* ts){
-	memset(&ts, 0, sizeof(ts));
+	memset(ts, 0, sizeof(*ts));
 }
 
 void ms_ticker_set_synchronizer(MSTicker *ticker, MSTickerSynchronizer *ts) {

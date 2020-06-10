@@ -70,6 +70,10 @@ static MS2_INLINE bool_t ms_queue_end(const MSQueue *q, const mblk_t *m){
 	return qend(&q->q,m);
 }
 
+static MS2_INLINE mblk_t *ms_queue_peek_next(MSQueue *q, mblk_t *cur){
+	return cur->b_next;
+}
+
 static MS2_INLINE void ms_queue_remove(MSQueue *q, mblk_t *m){
 	remq(&q->q,m);
 }
@@ -113,7 +117,7 @@ MS2_PUBLIC void ms_queue_destroy(MSQueue *q);
 #define mblk_set_user_flag(m,bit)    __mblk_set_flag(m,7,bit)  /* to be used by extensions to mediastreamer2*/
 #define mblk_get_user_flag(m)    (((m)->reserved2)>>7 & 0x1) /*bit 8*/
 
-#define mblk_set_cseq(m,value) (m)->reserved2=(m)->reserved2| ((value&0xFFFF)<<16);	
+#define mblk_set_cseq(m,value) (m)->reserved2 = ((m)->reserved2 & 0x0000FFFF) | ((value&0xFFFF)<<16);	
 #define mblk_get_cseq(m) ((m)->reserved2>>16)
 
 #define HAVE_ms_bufferizer_fill_current_metas
